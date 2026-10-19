@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Ruta Caracas Express - Retro Arcade 8-Bit</title>
+  <!-- Phaser 3 CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    body, html {
+      width: 100%; height: 100%; background: radial-gradient(circle at center, #181126 0%, #0a0714 65%, #020106 100%);
+      overflow: hidden; display: flex; justify-content: center; align-items: center; font-family: 'Courier New', Courier, monospace;
+    }
+    .arcade-cabinet {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 12px;
+      background: linear-gradient(180deg, #1f1b2c 0%, #0f0d18 50%, #171322 100%);
+      border: 4px solid #36324d; border-radius: 24px;
+      box-shadow: 0 0 60px rgba(0,0,0,0.95), 0 0 35px rgba(255,0,128,0.22), 0 0 50px rgba(0,240,255,0.18), inset 0 2px 5px rgba(255,255,255,0.15);
+      max-height: 98vh;
+    }
+    .arcade-bezel-top {
+      width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 2px 10px 6px 10px;
+      font-size: 11px; font-weight: bold; color: #ffe600; letter-spacing: 1.5px; text-shadow: 0 0 8px rgba(255,230,0,0.6);
+    }
+    .arcade-badge {
+      background: #ff007f; color: #ffffff; padding: 2px 6px; border-radius: 4px; font-size: 9px; box-shadow: 0 0 8px #ff007f;
+    }
+    #game-container {
+      position: relative; border: 9px solid #0a0812; outline: 3px solid #232034; border-radius: 20px;
+      overflow: hidden; box-shadow: inset 0 0 35px rgba(0,0,0,0.95), 0 0 25px rgba(0,240,255,0.25);
+    }
+    #game-container canvas { display: block; border-radius: 12px; }
+    #game-container::after {
+      content: " "; display: block; position: absolute; top: 0; left: 0; bottom: 0; right: 0;
+      background: radial-gradient(ellipse at center, transparent 65%, rgba(0,0,0,0.5) 90%, rgba(0,0,0,0.82) 100%),
+                  repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0px, rgba(0,0,0,0.25) 2px, transparent 2px, transparent 4px),
+                  linear-gradient(135deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0) 45%),
+                  linear-gradient(90deg, rgba(255,0,0,0.03), rgba(0,255,0,0.01), rgba(0,0,255,0.03));
+      pointer-events: none; z-index: 999; border-radius: 12px;
+    }
+    .arcade-bezel-bottom {
+      width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 6px 10px 2px 10px;
+      font-size: 10px; color: #00f0ff; letter-spacing: 1px; font-weight: bold;
+    }
+    .coin-badge { color: #ff3366; animation: coinBlink 1.2s infinite ease-in-out; }
+    @keyframes coinBlink {
+      0%, 100% { opacity: 1; text-shadow: 0 0 8px #ff0055; }
+      50% { opacity: 0.4; text-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="arcade-cabinet">
+  <div class="arcade-bezel-top">
+    <span>★ RUTA CARACAS EXPRESS ★</span>
+    <span class="arcade-badge">ARCADE 1989</span>
+  </div>
+  <div id="game-container"></div>
+  <div class="arcade-bezel-bottom">
+    <span class="coin-badge">🔴 25¢ INSERT COIN</span>
+    <span>🕹️ JOYSTICK + 2 BUTTONS</span>
+  </div>
+</div>
+
+<script>
+class SoundEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.bgmPlaying = false;
+    this.bgmStep = 0;
+    this.bgmTimer = null;
+  }
+  init() {
+    if (!this.ctx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AudioContext();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+  tone(freq, type = 'square', duration = 0.1, gainVal = 0.15) {
+    if (this.muted || !this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+      gain.gain.setValueAtTime(gainVal, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + duration);
+    } catch (e) {}
+  }
+  playHorn() {
+    if (this.muted || !this.ctx) return;
+    this.tone(370, 'sawtooth', 0.25, 0.2);
+    this.tone(440, 'sawtooth', 0.25, 0.2);
+  }
+  playCoin() {
+    if (this.muted || !this.ctx) return;
+    const notes = [523.25, 659.25, 783.99, 1046.50];
+    notes.forEach((f, idx) => {
+      setTimeout(() => this.tone(f, 'square', 0.08, 0.18), idx * 45);
+    });
+  }
+  playPothole() {
+    if (this.muted || !this.ctx) return;
+    this.tone(120, 'triangle', 0.18, 0.25);
+  }
+  playJump() {
+    if (this.muted || !this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(160, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(650, this.ctx.currentTime + 0.22);
+      gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.22);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.22);
+    } catch(e) {}
+  }
+  playTurbo() {
+    if (this.muted || !this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.35);
+      gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.001, this.ctx.currentTime + 0.35);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.35);
+    } catch(e) {}
+  }
+  playCrash() {
+    if (this.muted || !this.ctx) return;
+    try {
+      const bufferSize = this.ctx.sampleRate * 0.35;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, this.ctx.currentTime);
+      filter.frequency.exponentialRampToValueAtTime(80, this.ctx.currentTime + 0.35);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.35, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.35);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.ctx.destination);
+      noise.start();
+    } catch(e) {}
+  }
+  playGameOver() {
+    if (this.muted || !this.ctx) return;
+    const notes = [440, 415.3, 392, 349.2, 329.6];
+    notes.forEach((f, i) => {
+      setTimeout(() => this.tone(f, 'sawtooth', 0.22, 0.2), i * 160);
+    });
+  }
+  startBGM() {
+    if (this.bgmPlaying || !this.ctx) return;
+    this.bgmPlaying = true;
+    const bassline = [110, 110, 130.8, 146.8, 110, 110, 164.8, 146.8];
+    const melody = [440, 0, 523, 587, 659, 587, 523, 0];
+    this.bgmTimer = setInterval(() => {
+      if (!this.muted && this.ctx && this.bgmPlaying) {
+        const b = bassline[this.bgmStep % bassline.length];
+        const m = melody[this.bgmStep % melody.length];
+        this.tone(b, 'triangle', 0.12, 0.14);
+        if (m > 0 && Math.random() > 0.2) {
+          this.tone(m, 'square', 0.08, 0.06);
+        }
+        this.bgmStep++;
+      }
+    }, 170);
+  }
+  stopBGM() {
+    this.bgmPlaying = false;
+    if (this.bgmTimer) {
+      clearInterval(this.bgmTimer);
+      this.bgmTimer = null;
+    }
+  }
+}
+const audio = new SoundEngine();
+const GAME_W = 440;
+const GAME_H = 680;
+const ROAD_LEFT = 60;
+const ROAD_RIGHT = GAME_W - 60;
+const ROAD_WIDTH = ROAD_RIGHT - ROAD_LEFT;
+const LANES = [
+  ROAD_LEFT + ROAD_WIDTH * 0.15,
+  ROAD_LEFT + ROAD_WIDTH * 0.38,
+  ROAD_LEFT + ROAD_WIDTH * 0.62,
+  ROAD_LEFT + ROAD_WIDTH * 0.85
+];
+let HIGH_SCORE = parseInt(localStorage.getItem('ccs_express_hi') || '0', 10);
+const STATIONS = [
+  'PROPATRIA', 'PÉREZ BONALDE', 'PLAZA SUCRE', 'GATO NEGRO', 'AGUA SALUD',
+  'CAÑO AMARILLO', 'CAPITOLIO', 'LA HOYADA', 'P. CARABOBO', 'BELLAS ARTES',
+  'COL. INGENIEROS', 'PLAZA VENEZUELA', 'SABANA GRANDE', 'CHACAÍTO', 'CHACAO',
+  'ALTAMIRA', 'MIRANDA', 'LOS DOS CAMINOS', 'LOS CORTIJOS', 'LA CALIFORNIA',
+  'PETARE', 'PALO VERDE'
+];
+const VEHICLES = [
+  {
+    id: 'bus_encava',
+    name: 'ENCAVA 3100',
+    tag: 'ENCAVITA SALSERA',
+    desc: 'Equilibrado | Gran Manejo',
+    speedMult: 1.0,
+    turboBoost: 1.85,
+    color: '#00d4ff'
+  },
+  {
+    id: 'bus_iveco',
+    name: 'IVECO TURBODAILY',
+    tag: 'LA TROMPITA VELOZ',
+    desc: 'Pique Rápido | Salto Ágil',
+    speedMult: 1.06,
+    turboBoost: 1.95,
+    color: '#00ffaa'
+  },
+  {
+    id: 'bus_mercedes',
+    name: 'MERCEDES-BENZ O-371',
+    tag: 'EL EXPRESO PESADO',
+    desc: 'Mayor Inercia | Velocidad Punta',
+    speedMult: 1.12,
+    turboBoost: 1.75,
+    color: '#ff3366'
+  }
+];
+let selectedVehicleIndex = 0;
+class BootScene extends Phaser.Scene {
+  constructor() {
+    super('BootScene');
+  }
+  create() {
+    this.generateProceduralSprites();
+    this.scene.start('CoverScene');
+  }
+  generateProceduralSprites() {
+    const encavaG = this.make.graphics({ x: 0, y: 0, add: false });
+    encavaG.fillStyle(0xffffff, 1);
+    encavaG.fillRoundedRect(4, 4, 46, 76, 8);
+    encavaG.fillStyle(0x00d4ff, 1);
+    encavaG.fillRect(4, 20, 46, 8);
+    encavaG.fillStyle(0xffe600, 1);
+    encavaG.fillRect(4, 28, 46, 6);
+    encavaG.fillStyle(0x00f0ff, 0.85);
+    encavaG.fillRoundedRect(8, 6, 38, 14, 3);
+    encavaG.fillStyle(0x1a1a3a, 0.9);
+    encavaG.fillRect(7, 36, 6, 12);
+    encavaG.fillRect(7, 52, 6, 12);
+    encavaG.fillRect(41, 36, 6, 12);
+    encavaG.fillRect(41, 52, 6, 12);
+    encavaG.fillRect(10, 68, 34, 8);
+    encavaG.fillStyle(0xffffff, 1);
+    encavaG.fillCircle(12, 6, 4);
+    encavaG.fillCircle(42, 6, 4);
+    encavaG.fillStyle(0xff0044, 1);
+    encavaG.fillRect(6, 75, 8, 4);
+    encavaG.fillRect(40, 75, 8, 4);
+    encavaG.generateTexture('bus_encava', 54, 84);
+    encavaG.destroy();
+    const ivecoG = this.make.graphics({ x: 0, y: 0, add: false });
+    ivecoG.fillStyle(0x004d66, 1);
+    ivecoG.fillRoundedRect(4, 10, 46, 70, 6);
+    ivecoG.fillStyle(0x002e3d, 1);
+    ivecoG.fillRoundedRect(11, 4, 32, 12, 4);
+    ivecoG.fillStyle(0xddeeff, 1);
+    ivecoG.fillRect(16, 6, 22, 2);
+    ivecoG.fillRect(16, 9, 22, 2);
+    ivecoG.fillStyle(0xff7700, 1);
+    ivecoG.fillRect(4, 26, 46, 6);
+    ivecoG.fillStyle(0xffffff, 1);
+    ivecoG.fillRect(4, 32, 46, 4);
+    ivecoG.fillStyle(0x00f0ff, 0.85);
+    ivecoG.fillRect(9, 14, 36, 12);
+    ivecoG.fillStyle(0x111122, 0.9);
+    ivecoG.fillRect(7, 40, 5, 14);
+    ivecoG.fillRect(7, 58, 5, 14);
+    ivecoG.fillRect(42, 40, 5, 14);
+    ivecoG.fillRect(42, 58, 5, 14);
+    ivecoG.fillStyle(0xffee66, 1);
+    ivecoG.fillRect(6, 6, 5, 4);
+    ivecoG.fillRect(43, 6, 5, 4);
+    ivecoG.fillStyle(0xff0044, 1);
+    ivecoG.fillRect(6, 75, 7, 4);
+    ivecoG.fillRect(41, 75, 7, 4);
+    ivecoG.generateTexture('bus_iveco', 54, 84);
+    ivecoG.destroy();
+    const mercG = this.make.graphics({ x: 0, y: 0, add: false });
+    mercG.fillStyle(0x880022, 1);
+    mercG.fillRoundedRect(3, 4, 48, 78, 7);
+    mercG.fillStyle(0xf0e0cc, 1);
+    mercG.fillRect(3, 22, 48, 6);
+    mercG.fillStyle(0xbbccdd, 1);
+    mercG.fillRect(3, 28, 48, 4);
+    mercG.fillStyle(0x00f0ff, 0.85);
+    mercG.fillRect(7, 7, 19, 14);
+    mercG.fillRect(28, 7, 19, 14);
+    mercG.fillStyle(0x111111, 1);
+    mercG.fillRect(26, 7, 2, 14);
+    mercG.fillStyle(0x1a0510, 0.9);
+    mercG.fillRect(5, 36, 6, 12);
+    mercG.fillRect(5, 52, 6, 12);
+    mercG.fillRect(43, 36, 6, 12);
+    mercG.fillRect(43, 52, 6, 12);
+    mercG.lineStyle(1.8, 0xffffff, 1);
+    mercG.strokeCircle(27, 24, 4);
+    mercG.lineBetween(27, 20, 27, 24);
+    mercG.lineBetween(27, 24, 24, 27);
+    mercG.lineBetween(27, 24, 30, 27);
+    mercG.fillStyle(0xffffff, 1);
+    mercG.fillRect(7, 5, 6, 4);
+    mercG.fillRect(41, 5, 6, 4);
+    mercG.fillStyle(0xffaa00, 1);
+    mercG.fillRect(14, 5, 4, 3);
+    mercG.fillRect(36, 5, 4, 3);
+    mercG.fillStyle(0xff0033, 1);
+    mercG.fillRect(5, 77, 9, 4);
+    mercG.fillRect(40, 77, 9, 4);
+    mercG.generateTexture('bus_mercedes', 54, 84);
+    mercG.destroy();
+    const carG = this.make.graphics({ x: 0, y: 0, add: false });
+    carG.fillStyle(0xff007f, 1);
+    carG.fillRoundedRect(3, 3, 38, 62, 6);
+    carG.fillStyle(0x99004d, 1);
+    carG.fillRect(8, 18, 28, 28);
+    carG.fillStyle(0x00f0ff, 0.7);
+    carG.fillRect(10, 12, 24, 7);
+    carG.fillRect(10, 45, 24, 6);
+    carG.fillStyle(0xffe600, 1);
+    carG.fillRect(6, 60, 6, 4);
+    carG.fillRect(32, 60, 6, 4);
+    carG.generateTexture('enemy_car', 44, 68);
+    carG.destroy();
+    const motoG = this.make.graphics({ x: 0, y: 0, add: false });
+    motoG.fillStyle(0x00ff66, 1);
+    motoG.fillRect(10, 4, 6, 40);
+    motoG.fillStyle(0xffffff, 1);
+    motoG.fillCircle(13, 8, 4);
+    motoG.fillStyle(0x333333, 1);
+    motoG.fillRect(4, 16, 18, 4);
+    motoG.fillStyle(0xffe600, 1);
+    motoG.fillCircle(13, 44, 3);
+    motoG.generateTexture('moto', 26, 48);
+    motoG.destroy();
+    const potholeG = this.make.graphics({ x: 0, y: 0, add: false });
+    potholeG.fillStyle(0x100a1c, 1);
+    potholeG.fillEllipse(20, 14, 36, 22);
+    potholeG.lineStyle(2, 0xff0044, 0.8);
+    potholeG.strokeEllipse(20, 14, 34, 20);
+    potholeG.lineStyle(1.5, 0xff8800, 0.9);
+    potholeG.lineBetween(8, 14, 2, 10);
+    potholeG.lineBetween(32, 12, 38, 16);
+    potholeG.lineBetween(20, 22, 24, 28);
+    potholeG.generateTexture('pothole', 40, 30);
+    potholeG.destroy();
+    const arepaG = this.make.graphics({ x: 0, y: 0, add: false });
+    arepaG.fillStyle(0xffffff, 1);
+    arepaG.fillCircle(15, 15, 14);
+    arepaG.fillStyle(0xffd700, 1);
+    arepaG.fillCircle(15, 15, 11);
+    arepaG.fillStyle(0xb86e00, 0.8);
+    arepaG.fillRect(8, 10, 5, 3);
+    arepaG.fillRect(16, 14, 6, 3);
+    arepaG.fillRect(10, 18, 5, 3);
+    arepaG.generateTexture('arepa', 30, 30);
+    arepaG.destroy();
+    const sparkG = this.make.graphics({ x: 0, y: 0, add: false });
+    sparkG.fillStyle(0x00f0ff, 1);
+    sparkG.fillCircle(4, 4, 3);
+    sparkG.generateTexture('spark', 8, 8);
+    sparkG.destroy();
+  }
+}
+class CoverScene extends Phaser.Scene {
+  constructor() {
+    super('CoverScene');
+  }
+  create() {
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0a021c, 0x0a021c, 0x1c093a, 0x1c093a, 1);
+    bg.fillRect(0, 0, GAME_W, GAME_H);
+    bg.lineStyle(3, 0xff007f, 0.85);
+    bg.strokeCircle(GAME_W - 65, 75, 28);
+    bg.fillStyle(0xff007f, 0.2);
+    bg.fillCircle(GAME_W - 65, 75, 28);
+    bg.lineStyle(2, 0x00f0ff, 0.35);
+    bg.fillStyle(0x120829, 0.9);
+    bg.beginPath();
+    bg.moveTo(0, 210);
+    bg.lineTo(60, 180);
+    bg.lineTo(140, 195);
+    bg.lineTo(220, 155);
+    bg.lineTo(310, 190);
+    bg.lineTo(GAME_W, 175);
+    bg.lineTo(GAME_W, 260);
+    bg.lineTo(0, 260);
+    bg.closePath();
+    bg.fillPath();
+    bg.strokePath();
+    bg.fillStyle(0x130e20, 1);
+    bg.fillRect(30, 370, GAME_W - 60, 100);
+    bg.lineStyle(3, 0xff007f, 0.8);
+    bg.strokeLineShape(new Phaser.Geom.Line(30, 370, 30, 470));
+    bg.lineStyle(3, 0x00f0ff, 0.8);
+    bg.strokeLineShape(new Phaser.Geom.Line(GAME_W - 30, 370, GAME_W - 30, 470));
+    bg.fillStyle(0xfff5aa, 0.12);
+    bg.fillTriangle(GAME_W / 2 - 45, 355, GAME_W / 2 - 110, 470, GAME_W / 2 - 10, 470);
+    bg.fillTriangle(GAME_W / 2 + 45, 355, GAME_W / 2 + 10, 470, GAME_W / 2 + 110, 470);
+    const t1 = this.add.text(GAME_W / 2, 66, 'RUTA CARACAS', {
+      fontFamily: '"Impact", "Arial Black", sans-serif',
+      fontSize: '38px',
+      fontStyle: 'bold',
+      color: '#00f0ff',
+      stroke: '#ff007f',
+      strokeThickness: 6
+    }).setOrigin(0.5);
+    const t2 = this.add.text(GAME_W / 2, 110, 'EXPRESS', {
+      fontFamily: '"Impact", "Arial Black", sans-serif',
+      fontSize: '44px',
+      fontStyle: 'bold',
+      color: '#ffe600',
+      stroke: '#99004d',
+      strokeThickness: 6
+    }).setOrigin(0.5);
+    this.tweens.add({
+      targets: [t1, t2],
+      scale: 1.04,
+      duration: 650,
+      yoyo: true,
+      repeat: -1
+    });
+    this.add.text(GAME_W / 2, 150, '★ RETRO ARCADE EDITION 8-BIT ★', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#00ffcc',
+      letterSpacing: 2
+    }).setOrigin(0.5);
+    this.busContainer = this.add.container(GAME_W / 2, 280);
+    const busG = this.add.graphics();
+    this.drawPixelEncavaFront(busG, 0, 0);
+    this.busContainer.add(busG);
+    this.tweens.add({
+      targets: this.busContainer,
+      y: 277,
+      duration: 550,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+    this.add.text(GAME_W / 2, 380, '🚐 ENCAVA 3100 "ENCAVITA SALSERA" 🚐', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setOrigin(0.5);
+    const startPrompt = this.add.text(GAME_W / 2, 490, '¡PULSA ESPACIO / CUALQUIER BOTÓN!', {
+      fontFamily: '"Courier New", monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: '#00ffcc',
+      backgroundColor: '#1b0933',
+      padding: { x: 12, y: 10 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.tweens.add({
+      targets: startPrompt,
+      alpha: 0.2,
+      duration: 400,
+      yoyo: true,
+      repeat: -1
+    });
+    this.add.text(GAME_W / 2, 548, '🎮 1 JOYSTICK (◄/►) + 2 BOTONES DE ACCIÓN\n[ESPACIO/Z] SALTO  |  [X/CTRL] TURBO', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      align: 'center',
+      color: '#ffffff',
+      lineSpacing: 5
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 608, '🔴 INSERT COIN (1/5) • PLATANUS HACK 26', {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#ff3366'
+    }).setOrigin(0.5);
+    const enterMenu = () => {
+      audio.init();
+      audio.playHorn();
+      audio.startBGM();
+      this.cameras.main.fade(220, 0, 0, 0);
+      this.time.delayedCall(230, () => {
+        this.scene.start('TitleScene');
+      });
+    };
+    ['keydown-SPACE', 'keydown-ENTER', 'keydown-Z', 'keydown-X', 'keydown-C', 'keydown-CONTROL', 'keydown-ONE', 'keydown-FIVE', 'keydown-UP', 'keydown-DOWN'].forEach(k => {
+      this.input.keyboard.on(k, enterMenu);
+    });
+    this.input.on('pointerdown', enterMenu);
+    startPrompt.on('pointerdown', enterMenu);
+  }
+  drawPixelEncavaFront(g, cx, cy) {
+    g.fillStyle(0x000000, 0.65);
+    g.fillEllipse(cx, cy + 58, 145, 20);
+    g.fillStyle(0x111115, 1);
+    g.fillRoundedRect(cx - 56, cy + 40, 18, 22, 4);
+    g.fillRoundedRect(cx + 38, cy + 40, 18, 22, 4);
+    g.fillStyle(0xffffff, 1);
+    g.fillRoundedRect(cx - 60, cy - 60, 120, 110, 10);
+    g.fillStyle(0x00a3cc, 1);
+    g.fillRoundedRect(cx - 54, cy - 66, 108, 12, 4);
+    g.fillStyle(0xffe600, 1);
+    g.fillRect(cx - 36, cy - 63, 72, 4);
+    g.fillStyle(0x001428, 1);
+    g.fillRoundedRect(cx - 52, cy - 50, 104, 42, 4);
+    g.fillStyle(0x00d4ff, 0.75);
+    g.fillRect(cx - 48, cy - 46, 46, 34);
+    g.fillRect(cx + 2, cy - 46, 46, 34);
+    g.fillStyle(0xffffff, 0.45);
+    g.fillTriangle(cx - 38, cy - 46, cx - 18, cy - 46, cx - 48, cy - 20);
+    g.fillTriangle(cx + 12, cy - 46, cx + 32, cy - 46, cx + 2, cy - 20);
+    g.fillStyle(0xffe600, 1);
+    g.fillRect(cx - 38, cy - 48, 76, 8);
+    g.fillStyle(0x00d4ff, 1);
+    g.fillRect(cx - 60, cy - 5, 120, 14);
+    g.fillStyle(0xffe600, 1);
+    g.fillRect(cx - 60, cy + 9, 120, 10);
+    g.fillStyle(0x151520, 1);
+    g.fillRoundedRect(cx - 38, cy + 22, 76, 18, 3);
+    g.fillStyle(0xdddddd, 1);
+    for (let r = 0; r < 3; r++) {
+      g.fillRect(cx - 32, cy + 25 + r * 5, 64, 2);
+    }
+    g.fillStyle(0x404050, 1);
+    g.fillRoundedRect(cx - 64, cy + 42, 128, 14, 4);
+    g.fillStyle(0xeeeeff, 1);
+    g.fillRect(cx - 60, cy + 44, 120, 4);
+    g.fillStyle(0x111111, 1);
+    g.fillCircle(cx - 45, cy + 27, 9);
+    g.fillCircle(cx + 45, cy + 27, 9);
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(cx - 45, cy + 27, 7);
+    g.fillCircle(cx + 45, cy + 27, 7);
+    g.fillStyle(0xfff5aa, 1);
+    g.fillCircle(cx - 45, cy + 27, 4);
+    g.fillCircle(cx + 45, cy + 27, 4);
+    g.fillStyle(0xff7700, 1);
+    g.fillRect(cx - 58, cy + 23, 6, 8);
+    g.fillRect(cx + 52, cy + 23, 6, 8);
+    g.fillStyle(0x222222, 1);
+    g.fillRect(cx - 72, cy - 36, 10, 20);
+    g.fillRect(cx + 62, cy - 36, 10, 20);
+    g.lineStyle(2, 0x888888, 1);
+    g.lineBetween(cx - 62, cy - 26, cx - 58, cy - 20);
+    g.lineBetween(cx + 62, cy - 26, cx + 58, cy - 20);
+  }
+}
+class TitleScene extends Phaser.Scene {
+  constructor() {
+    super('TitleScene');
+  }
+  create() {
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0d0221, 0x0d0221, 0x1f0b3d, 0x1f0b3d, 1);
+    bg.fillRect(0, 0, GAME_W, GAME_H);
+    this.drawAvila();
+    const titleText1 = this.add.text(GAME_W / 2, 54, 'RUTA CARACAS', {
+      fontFamily: '"Impact", "Arial Black", sans-serif',
+      fontSize: '32px',
+      fontStyle: 'bold',
+      color: '#00f0ff',
+      stroke: '#ff007f',
+      strokeThickness: 5
+    }).setOrigin(0.5);
+    const titleText2 = this.add.text(GAME_W / 2, 90, 'EXPRESS', {
+      fontFamily: '"Impact", "Arial Black", sans-serif',
+      fontSize: '36px',
+      fontStyle: 'bold',
+      color: '#ffe600',
+      stroke: '#99004d',
+      strokeThickness: 5
+    }).setOrigin(0.5);
+    this.tweens.add({
+      targets: [titleText1, titleText2],
+      scale: 1.04,
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+    this.createVehicleSelector();
+    this.add.text(GAME_W / 2, 368, 'CONTROLES ARCADE FÍSICOS:', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00ffcc',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 404, 'JOYSTICK ◄ / ► : CAMBIAR CARRIL / MODELO\nBOTÓN 1 [ESPACIO / Z] : SALTAR 🦘\nBOTÓN 2 [X / CTRL / ALT] : TURBO CANDELA 🔥', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      align: 'center',
+      color: '#ffffff',
+      lineSpacing: 5
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 466, '⭐ BACHE +10 | MOTO +20 | AUTO +30 | AREPA +15\n(PUNTUACIÓN EXCLUSIVA POR ESQUIVAR Y AREPAS)', {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      align: 'center',
+      color: '#ff9900',
+      lineSpacing: 4
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 502, '🚉 LÍNEA 1: PARADAS CADA 20 KM (PROPATRIA ➔ PALO VERDE)', {
+      fontFamily: 'monospace',
+      fontSize: '9.5px',
+      fontStyle: 'bold',
+      color: '#00ffcc'
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 532, `RECORD HISTÓRICO: ${HIGH_SCORE} PTS`, {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: '#ff007f'
+    }).setOrigin(0.5);
+    const startText = this.add.text(GAME_W / 2, 596, '¡INSERT COIN / PULSA ESPACIO!', {
+      fontFamily: '"Courier New", monospace',
+      fontSize: '16px',
+      fontStyle: 'bold',
+      color: '#ffe600',
+      backgroundColor: '#2b0938',
+      padding: { x: 14, y: 9 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.tweens.add({
+      targets: startText,
+      alpha: 0.2,
+      duration: 450,
+      yoyo: true,
+      repeat: -1
+    });
+    const startGame = () => {
+      audio.init();
+      audio.playHorn();
+      audio.startBGM();
+      this.scene.start('GameScene', { vehicle: VEHICLES[selectedVehicleIndex] });
+    };
+    ['keydown-SPACE', 'keydown-ENTER', 'keydown-Z', 'keydown-X', 'keydown-C', 'keydown-CONTROL', 'keydown-ONE', 'keydown-FIVE'].forEach(k => {
+      this.input.keyboard.on(k, startGame);
+    });
+    startText.on('pointerdown', startGame);
+    this.input.on('pointerdown', () => audio.init());
+  }
+  createVehicleSelector() {
+    const boxX = 16;
+    const boxY = 118;
+    const boxW = GAME_W - 32;
+    const boxH = 226;
+    const selBox = this.add.graphics();
+    selBox.fillStyle(0x0f0520, 0.94);
+    selBox.fillRoundedRect(boxX, boxY, boxW, boxH, 14);
+    selBox.lineStyle(2, 0x00f0ff, 0.85);
+    selBox.strokeRoundedRect(boxX, boxY, boxW, boxH, 14);
+    selBox.fillStyle(0x230c3d, 0.85);
+    selBox.fillRoundedRect(boxX + 2, boxY + 2, boxW - 4, 28, { tl: 12, tr: 12, bl: 0, br: 0 });
+    this.add.text(GAME_W / 2, boxY + 15, '◀ SELECCIONA TU CAMIONETA ▶', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#00f0ff'
+    }).setOrigin(0.5);
+    this.modelNameText = this.add.text(GAME_W / 2, boxY + 44, VEHICLES[selectedVehicleIndex].name, {
+      fontFamily: 'monospace',
+      fontSize: '18px',
+      fontStyle: 'bold',
+      color: VEHICLES[selectedVehicleIndex].color,
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5);
+    this.previewBus = this.add.sprite(GAME_W / 2, boxY + 116, VEHICLES[selectedVehicleIndex].id).setScale(1.3).setInteractive({ useHandCursor: true });
+    this.tweens.add({
+      targets: this.previewBus,
+      y: boxY + 112,
+      duration: 600,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+    const leftBtn = this.add.text(45, boxY + 116, '◄', {
+      fontFamily: 'monospace',
+      fontSize: '32px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const rightBtn = this.add.text(GAME_W - 45, boxY + 116, '►', {
+      fontFamily: 'monospace',
+      fontSize: '32px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.modelTagText = this.add.text(GAME_W / 2, boxY + 176, VEHICLES[selectedVehicleIndex].tag, {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setOrigin(0.5);
+    this.modelDescText = this.add.text(GAME_W / 2, boxY + 198, VEHICLES[selectedVehicleIndex].desc, {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      color: '#b0b8d8'
+    }).setOrigin(0.5);
+    const updateVehicle = (dir) => {
+      selectedVehicleIndex = (selectedVehicleIndex + dir + VEHICLES.length) % VEHICLES.length;
+      const v = VEHICLES[selectedVehicleIndex];
+      this.previewBus.setTexture(v.id);
+      this.modelNameText.setText(v.name).setColor(v.color);
+      this.modelTagText.setText(v.tag);
+      this.modelDescText.setText(v.desc);
+      audio.tone(550, 'square', 0.05, 0.12);
+      this.tweens.add({
+        targets: this.previewBus,
+        scale: 1.48,
+        duration: 90,
+        yoyo: true
+      });
+    };
+    leftBtn.on('pointerdown', () => updateVehicle(-1));
+    rightBtn.on('pointerdown', () => updateVehicle(1));
+    this.previewBus.on('pointerdown', () => updateVehicle(1));
+    this.input.keyboard.on('keydown-LEFT', () => updateVehicle(-1));
+    this.input.keyboard.on('keydown-RIGHT', () => updateVehicle(1));
+    this.input.keyboard.on('keydown-A', () => updateVehicle(-1));
+    this.input.keyboard.on('keydown-D', () => updateVehicle(1));
+  }
+  drawAvila() {
+    const avila = this.add.graphics();
+    avila.lineStyle(3, 0x00f0ff, 0.4);
+    avila.fillStyle(0x13082b, 0.9);
+    avila.beginPath();
+    avila.moveTo(0, 240);
+    avila.lineTo(50, 210);
+    avila.lineTo(130, 230);
+    avila.lineTo(210, 180);
+    avila.lineTo(290, 220);
+    avila.lineTo(360, 195);
+    avila.lineTo(GAME_W, 235);
+    avila.lineTo(GAME_W, 300);
+    avila.lineTo(0, 300);
+    avila.closePath();
+    avila.fillPath();
+    avila.strokePath();
+    avila.lineStyle(3, 0xff007f, 0.8);
+    avila.strokeCircle(GAME_W - 65, 80, 28);
+    avila.fillStyle(0xff007f, 0.15);
+    avila.fillCircle(GAME_W - 65, 80, 28);
+  }
+}
+class GameScene extends Phaser.Scene {
+  constructor() {
+    super('GameScene');
+  }
+  init(data) {
+    this.selectedVehicle = (data && data.vehicle) ? data.vehicle : VEHICLES[selectedVehicleIndex];
+  }
+  create() {
+    this.score = 0;
+    this.distance = 0;
+    this.health = 3;
+    this.turboFuel = 100;
+    this.isTurbo = false;
+    this.isJumping = false;
+    this.jumpCooldown = false;
+    this.invulnerable = false;
+    this.baseSpeed = 7 * (this.selectedVehicle.speedMult || 1.0);
+    this.currentSpeed = this.baseSpeed;
+    this.gameSpeedModifier = 1;
+    this.isGameOver = false;
+    this.currentStationIndex = 0;
+    this.nextStationKm = 20.0;
+    this.stationGantries = [];
+    audio.init();
+    this.createRoad();
+    this.busShadow = this.add.ellipse(LANES[1], GAME_H - 120 + 36, 44, 14, 0x000000, 0.55);
+    this.busShadow.setDepth(2);
+    this.obstacles = this.physics.add.group();
+    this.collectibles = this.physics.add.group();
+    this.currentLane = 1;
+    this.player = this.physics.add.sprite(LANES[this.currentLane], GAME_H - 120, this.selectedVehicle.id);
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(40, 70);
+    this.player.setDepth(20);
+    this.particles = this.add.particles(0, 0, 'spark', {
+      speed: { min: 80, max: 200 },
+      angle: { min: 80, max: 100 },
+      scale: { start: 1.2, end: 0 },
+      blendMode: 'ADD',
+      lifespan: 300,
+      emitting: false
+    });
+    this.particles.setDepth(18);
+    this.particles.startFollow(this.player, 0, 35);
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.keyA = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+    this.keyD = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+    this.keyW = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
+    this.keyS = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
+    this.keyZ = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
+    this.keyX = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.X);
+    this.keyC = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
+    this.keySpace = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.keyCtrl = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL);
+    this.keyAlt = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ALT);
+    this.keyShift = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
+    this.keyM = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.M);
+    this.keySpace.on('down', () => this.jump());
+    this.keyZ.on('down', () => this.jump());
+    this.keyM.on('down', () => {
+      audio.muted = !audio.muted;
+      this.soundStatusText.setText(audio.muted ? '🔇 MUTE' : '🔊 SFX ON');
+    });
+    this.input.on('pointerdown', (pointer) => {
+      if (pointer.y > GAME_H - 58) return;
+      if (pointer.x < GAME_W / 2) this.changeLane(-1);
+      else this.changeLane(1);
+    });
+    this.spawnTimer = this.time.addEvent({
+      delay: 1100,
+      callback: this.spawnTraffic,
+      callbackScope: this,
+      loop: true
+    });
+    this.physics.add.overlap(this.player, this.obstacles, this.hitObstacle, null, this);
+    this.physics.add.overlap(this.player, this.collectibles, this.collectItem, null, this);
+    this.createHUD();
+    this.input.keyboard.on('keydown-LEFT', () => this.changeLane(-1));
+    this.input.keyboard.on('keydown-RIGHT', () => this.changeLane(1));
+    this.keyA.on('down', () => this.changeLane(-1));
+    this.keyD.on('down', () => this.changeLane(1));
+  }
+  createRoad() {
+    this.roadBg = this.add.graphics();
+    this.roadBg.fillStyle(0x181324, 1);
+    this.roadBg.fillRect(ROAD_LEFT, 0, ROAD_WIDTH, GAME_H);
+    this.roadBg.lineStyle(4, 0xff007f, 1);
+    this.roadBg.strokeLineShape(new Phaser.Geom.Line(ROAD_LEFT, 0, ROAD_LEFT, GAME_H));
+    this.roadBg.lineStyle(4, 0x00f0ff, 1);
+    this.roadBg.strokeLineShape(new Phaser.Geom.Line(ROAD_RIGHT, 0, ROAD_RIGHT, GAME_H));
+    this.roadBg.fillStyle(0x280e47, 1);
+    this.roadBg.fillRect(0, 0, ROAD_LEFT - 2, GAME_H);
+    this.roadBg.fillRect(ROAD_RIGHT + 2, 0, GAME_W - ROAD_RIGHT, GAME_H);
+    this.roadBg.setDepth(0);
+    this.stripes = [];
+    const numStripes = 12;
+    for (let i = 0; i < numStripes; i++) {
+      const y = i * (GAME_H / numStripes);
+      const stripe1 = this.add.rectangle(ROAD_LEFT + ROAD_WIDTH * 0.27, y, 4, 30, 0xffffff, 0.7);
+      const stripe2 = this.add.rectangle(ROAD_LEFT + ROAD_WIDTH * 0.50, y, 5, 30, 0xffe600, 0.9);
+      const stripe3 = this.add.rectangle(ROAD_LEFT + ROAD_WIDTH * 0.73, y, 4, 30, 0xffffff, 0.7);
+      stripe1.setDepth(1);
+      stripe2.setDepth(1);
+      stripe3.setDepth(1);
+      this.stripes.push(stripe1, stripe2, stripe3);
+    }
+  }
+  createHUD() {
+    const hudBar = this.add.graphics();
+    hudBar.fillStyle(0x0a0518, 0.9);
+    hudBar.fillRect(0, 0, GAME_W, 64);
+    hudBar.lineStyle(2, 0x00f0ff, 0.8);
+    hudBar.strokeLineShape(new Phaser.Geom.Line(0, 64, GAME_W, 64));
+    hudBar.setDepth(200);
+    this.scoreText = this.add.text(14, 10, 'PUNTOS: 0', {
+      fontFamily: 'monospace',
+      fontSize: '15px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setDepth(210);
+    this.distanceText = this.add.text(14, 34, 'KM: 0.0', {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      color: '#00f0ff'
+    }).setDepth(210);
+    this.healthText = this.add.text(GAME_W - 14, 10, 'VIDAS: ❤️❤️❤️', {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: '#ff007f'
+    }).setOrigin(1, 0).setDepth(210);
+    this.turboLabel = this.add.text(GAME_W - 14, 34, 'TURBO: ', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00ff66'
+    }).setOrigin(1, 0).setDepth(210);
+    this.turboBarBg = this.add.rectangle(GAME_W - 55, 41, 70, 10, 0x333333).setOrigin(1, 0.5).setDepth(210);
+    this.turboBar = this.add.rectangle(GAME_W - 55, 41, 70, 8, 0x00ff66).setOrigin(1, 0.5).setDepth(210);
+    this.soundStatusText = this.add.text(GAME_W / 2, 8, '🔊 [M] MUTE', {
+      fontFamily: 'monospace',
+      fontSize: '10px',
+      color: '#8888aa'
+    }).setOrigin(0.5, 0).setDepth(210);
+    this.stationText = this.add.text(GAME_W / 2, 32, 'Ⓜ️ ' + STATIONS[0], {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: '#ffcc00',
+      stroke: '#661100',
+      strokeThickness: 3
+    }).setOrigin(0.5, 0).setDepth(210);
+    this.touchTurbo = false;
+    this.jumpBtnText = this.add.text(GAME_W * 0.28, GAME_H - 26, '🦘 [ESP/Z] SALTO', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#00ffaa',
+      backgroundColor: '#160a2b',
+      padding: { x: 10, y: 7 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setDepth(210);
+    this.jumpBtnText.on('pointerdown', () => this.jump());
+    this.turboBtnText = this.add.text(GAME_W * 0.72, GAME_H - 26, '🔥 [X/CTRL] TURBO', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#ff6600',
+      backgroundColor: '#260a16',
+      padding: { x: 10, y: 7 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setDepth(210);
+    this.turboBtnText.on('pointerdown', () => { this.touchTurbo = true; });
+    this.turboBtnText.on('pointerup', () => { this.touchTurbo = false; });
+    this.turboBtnText.on('pointerout', () => { this.touchTurbo = false; });
+  }
+  changeLane(direction) {
+    if (this.isGameOver) return;
+    const targetLane = Phaser.Math.Clamp(this.currentLane + direction, 0, LANES.length - 1);
+    if (targetLane !== this.currentLane) {
+      this.currentLane = targetLane;
+      this.tweens.add({
+        targets: [this.player, this.busShadow],
+        x: LANES[this.currentLane],
+        duration: 120,
+        ease: 'Cubic.easeOut'
+      });
+      audio.tone(480, 'square', 0.04, 0.08);
+    }
+  }
+  spawnTraffic() {
+    if (this.isGameOver) return;
+    const laneIdx = Phaser.Math.Between(0, LANES.length - 1);
+    const posX = LANES[laneIdx];
+    const roll = Math.random();
+    if (roll < 0.36) {
+      const car = this.obstacles.create(posX, -70, 'enemy_car');
+      car.type = 'car';
+      car.speed = this.currentSpeed * Phaser.Math.FloatBetween(0.45, 0.65);
+      car.body.setSize(36, 58);
+      car.setDepth(15);
+    } else if (roll < 0.58) {
+      const hole = this.obstacles.create(posX, -50, 'pothole');
+      hole.type = 'pothole';
+      hole.speed = 0;
+      hole.body.setSize(32, 22);
+      hole.setDepth(5);
+    } else if (roll < 0.76) {
+      const moto = this.obstacles.create(posX, -60, 'moto');
+      moto.type = 'moto';
+      moto.speed = this.currentSpeed * 0.8;
+      moto.body.setSize(22, 42);
+      moto.setDepth(15);
+    } else {
+      const arepa = this.collectibles.create(posX, -40, 'arepa');
+      arepa.type = 'arepa';
+      arepa.speed = 0;
+      arepa.body.setSize(26, 26);
+      arepa.setDepth(10);
+      this.tweens.add({
+        targets: arepa,
+        angle: 360,
+        duration: 1600,
+        repeat: -1
+      });
+    }
+  }
+  spawnStation(name) {
+    const gantry = this.add.container(GAME_W / 2, -55);
+    gantry.setDepth(140);
+    const beam = this.add.graphics();
+    beam.fillStyle(0x140c26, 0.95);
+    beam.fillRoundedRect(-ROAD_WIDTH / 2 - 14, 0, ROAD_WIDTH + 28, 36, 6);
+    beam.lineStyle(2, 0xff7700, 1);
+    beam.strokeRoundedRect(-ROAD_WIDTH / 2 - 14, 0, ROAD_WIDTH + 28, 36, 6);
+    beam.fillStyle(0xee5500, 1);
+    beam.fillRoundedRect(-140, 4, 280, 28, 4);
+    beam.lineStyle(1, 0xffffff, 0.8);
+    beam.strokeRoundedRect(-140, 4, 280, 28, 4);
+    const txt = this.add.text(0, 18, `Ⓜ️ PARADA: ${name}`, {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#ffffff',
+      stroke: '#802000',
+      strokeThickness: 2
+    }).setOrigin(0.5);
+    gantry.add([beam, txt]);
+    gantry.stationName = name;
+    gantry.passed = false;
+    this.stationGantries.push(gantry);
+  }
+  update(time, delta) {
+    if (this.isGameOver) return;
+    this.busShadow.x = this.player.x;
+    this.busShadow.y = GAME_H - 120 + 36;
+    const isTurboPressed = this.keyX.isDown || this.keyCtrl.isDown || this.keyAlt.isDown ||
+                           this.keyShift.isDown || this.keyC.isDown || this.cursors.up.isDown ||
+                           this.keyW.isDown || this.touchTurbo;
+    if (isTurboPressed && this.turboFuel > 0) {
+      if (!this.isTurbo) {
+        this.isTurbo = true;
+        this.particles.emitting = true;
+        audio.playTurbo();
+      }
+      this.currentSpeed = this.baseSpeed * 1.85;
+      this.turboFuel = Math.max(0, this.turboFuel - 0.6);
+      this.cameras.main.shake(100, 0.003);
+    } else {
+      if (this.isTurbo) {
+        this.isTurbo = false;
+        this.particles.emitting = false;
+      }
+      if (this.cursors.up.isDown || this.keyW.isDown) {
+        this.currentSpeed = this.baseSpeed * 1.25;
+      } else if (this.cursors.down.isDown || this.keyS.isDown) {
+        this.currentSpeed = this.baseSpeed * 0.75;
+      } else {
+        this.currentSpeed = this.baseSpeed;
+      }
+      this.turboFuel = Math.min(100, this.turboFuel + 0.05);
+    }
+    this.turboBar.width = (this.turboFuel / 100) * 70;
+    this.turboBar.fillColor = (this.turboFuel < 25) ? 0xff0044 : 0x00ff66;
+    this.stripes.forEach(s => {
+      s.y += this.currentSpeed;
+      if (s.y > GAME_H + 20) s.y = -20;
+    });
+    this.obstacles.getChildren().forEach(obs => {
+      obs.y += (this.currentSpeed - (obs.speed || 0));
+      if (!obs.dodged && obs.y > (this.player.y + 40)) {
+        obs.dodged = true;
+        let points = 10, label = '+10 BACHE', color = '#ff9900';
+        if (obs.type === 'pothole') {
+          points = 10; label = this.isJumping ? '+10 ¡SALTADO! 🦘' : '+10 BACHE 🕳️'; color = '#ff9900';
+        } else if (obs.type === 'moto') {
+          points = 20; label = this.isJumping ? '+20 ¡SALTADO! 🦘' : '+20 MOTO 🏍️'; color = '#00ff66';
+        } else if (obs.type === 'car') {
+          points = 30; label = this.isJumping ? '+30 ¡SALTADO! 🦘' : '+30 AUTO 🚗'; color = '#00f0ff';
+        }
+        this.score += points;
+        this.scoreText.setText(`PUNTOS: ${this.score}`);
+        this.showFloatingText(obs.x, this.player.y + 10, label, color);
+        audio.tone(520, 'square', 0.04, 0.08);
+      }
+      if (obs.y > GAME_H + 80) obs.destroy();
+    });
+    this.collectibles.getChildren().forEach(col => {
+      col.y += this.currentSpeed;
+      if (col.y > GAME_H + 50) col.destroy();
+    });
+    this.distance += (this.currentSpeed * 0.002);
+    this.distanceText.setText(`KM: ${this.distance.toFixed(1)}`);
+    if (this.currentStationIndex < STATIONS.length - 1 && this.distance >= this.nextStationKm) {
+      this.currentStationIndex++;
+      this.nextStationKm += 20.0;
+      this.spawnStation(STATIONS[this.currentStationIndex]);
+    }
+    for (let i = this.stationGantries.length - 1; i >= 0; i--) {
+      const gantry = this.stationGantries[i];
+      gantry.y += this.currentSpeed;
+      if (!gantry.passed && gantry.y >= (this.player.y - 10)) {
+        gantry.passed = true;
+        this.stationText.setText('Ⓜ️ ' + gantry.stationName);
+        audio.playCoin();
+        this.turboFuel = 100;
+        this.showFloatingText(GAME_W / 2, this.player.y - 30, `¡PARADA: ${gantry.stationName}! 🚉`, '#ff9900');
+        this.showFloatingText(GAME_W / 2, this.player.y + 15, '🔥 ¡TURBO LLENO! (SUBEN PASAJEROS)', '#00ffaa');
+      }
+      if (gantry.y > GAME_H + 90) {
+        gantry.destroy();
+        this.stationGantries.splice(i, 1);
+      }
+    }
+    this.baseSpeed = (7 * (this.selectedVehicle.speedMult || 1.0)) + (this.distance * 0.18);
+    if (this.spawnTimer.delay > 650) {
+      this.spawnTimer.delay = 1100 - (this.distance * 15);
+    }
+  }
+  jump() {
+    if (this.isGameOver || this.isJumping || this.jumpCooldown) return;
+    this.isJumping = true;
+    this.jumpCooldown = true;
+    audio.playJump();
+    this.player.setDepth(150);
+    this.busShadow.setScale(0.65);
+    this.busShadow.setAlpha(0.25);
+    if (this.jumpBtnText) {
+      this.jumpBtnText.setColor('#ffaa00');
+      this.jumpBtnText.setText('⏳ EN EL AIRE...');
+    }
+    const origY = this.player.y;
+    this.tweens.add({
+      targets: this.player,
+      scale: 1.45,
+      y: origY - 26,
+      duration: 340,
+      yoyo: true,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        this.isJumping = false;
+        this.player.setScale(1);
+        this.player.y = origY;
+        this.player.setDepth(20);
+        this.busShadow.setScale(1);
+        this.busShadow.setAlpha(0.55);
+        this.particles.emitParticleAt(this.player.x, this.player.y + 35, 5);
+      }
+    });
+    this.time.delayedCall(800, () => {
+      this.jumpCooldown = false;
+      if (this.jumpBtnText) {
+        this.jumpBtnText.setColor('#00ffaa');
+        this.jumpBtnText.setText('🦘 [ESP/Z] SALTO');
+      }
+    });
+  }
+  hitObstacle(player, obstacle) {
+    if (this.invulnerable || this.isGameOver || this.isJumping) return;
+    audio.playCrash();
+    this.cameras.main.shake(250, 0.02);
+    obstacle.destroy();
+    this.health--;
+    const hearts = ['🖤🖤🖤', '❤️🖤🖤', '❤️❤️🖤', '❤️❤️❤️'];
+    this.healthText.setText(`VIDAS: ${hearts[Math.max(0, this.health)]}`);
+    if (this.health <= 0) {
+      this.gameOver();
+      return;
+    }
+    this.invulnerable = true;
+    this.tweens.add({
+      targets: this.player,
+      alpha: 0.2,
+      duration: 100,
+      yoyo: true,
+      repeat: 6,
+      onComplete: () => {
+        this.player.alpha = 1;
+        this.invulnerable = false;
+      }
+    });
+  }
+  collectItem(player, item) {
+    if (this.isGameOver) return;
+    if (item.type === 'arepa') {
+      audio.playCoin();
+      this.score += 15;
+      this.turboFuel = 100;
+      this.scoreText.setText(`PUNTOS: ${this.score}`);
+      this.showFloatingText(item.x, item.y, '+15 AREPA! 🫓', '#ffe600');
+    }
+    item.destroy();
+  }
+  showFloatingText(x, y, message, color) {
+    const txt = this.add.text(x, y, message, {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: color
+    }).setOrigin(0.5).setDepth(160);
+    this.tweens.add({
+      targets: txt,
+      y: y - 45,
+      alpha: 0,
+      duration: 650,
+      onComplete: () => txt.destroy()
+    });
+  }
+  gameOver() {
+    this.isGameOver = true;
+    this.physics.pause();
+    this.particles.emitting = false;
+    audio.stopBGM();
+    audio.playGameOver();
+    if (this.score > HIGH_SCORE) {
+      HIGH_SCORE = this.score;
+      localStorage.setItem('ccs_express_hi', HIGH_SCORE.toString());
+    }
+    this.time.delayedCall(800, () => {
+      this.scene.start('GameOverScene', {
+        score: this.score,
+        distance: this.distance.toFixed(1),
+        station: STATIONS[this.currentStationIndex],
+        stationNum: this.currentStationIndex + 1
+      });
+    });
+  }
+}
+class GameOverScene extends Phaser.Scene {
+  constructor() {
+    super('GameOverScene');
+  }
+  create(data) {
+    const finalScore = data.score || 0;
+    const finalDist = data.distance || '0.0';
+    const lastStation = data.station || 'PROPATRIA';
+    const stationNum = data.stationNum || 1;
+    const overlay = this.add.graphics();
+    overlay.fillStyle(0x0a0314, 0.94);
+    overlay.fillRect(0, 0, GAME_W, GAME_H);
+    const goText = this.add.text(GAME_W / 2, 135, 'GAME OVER', {
+      fontFamily: '"Impact", "Arial Black", sans-serif',
+      fontSize: '46px',
+      color: '#ff0044',
+      stroke: '#330011',
+      strokeThickness: 8
+    }).setOrigin(0.5);
+    this.tweens.add({
+      targets: goText,
+      scale: 1.08,
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+    this.add.text(GAME_W / 2, 195, '¡TE QUEDASTE ACCIDENTADO!', {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      color: '#ff9900',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    const panel = this.add.graphics();
+    panel.fillStyle(0x190d33, 0.95);
+    panel.fillRoundedRect(30, 230, GAME_W - 60, 240, 10);
+    panel.lineStyle(3, 0x00f0ff, 0.7);
+    panel.strokeRoundedRect(30, 230, GAME_W - 60, 240, 10);
+    this.add.text(GAME_W / 2, 268, `PUNTAJE FINAL: ${finalScore}`, {
+      fontFamily: 'monospace',
+      fontSize: '17px',
+      fontStyle: 'bold',
+      color: '#ffe600'
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 308, `RECORRIDO: ${finalDist} KM`, {
+      fontFamily: 'monospace',
+      fontSize: '15px',
+      color: '#00f0ff'
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 348, `PARADA: Ⓜ️ ${lastStation} (${stationNum}/22)`, {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      fontStyle: 'bold',
+      color: '#ff9900'
+    }).setOrigin(0.5);
+    this.add.text(GAME_W / 2, 388, `RECORD HISTÓRICO: ${HIGH_SCORE} PTS`, {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      fontStyle: 'bold',
+      color: '#ff007f'
+    }).setOrigin(0.5);
+    if (finalScore >= HIGH_SCORE && finalScore > 0) {
+      const hiTxt = this.add.text(GAME_W / 2, 428, '★ ¡NUEVO RECORD LOCAL! ★', {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#00ff66',
+        fontStyle: 'bold'
+      }).setOrigin(0.5);
+      this.tweens.add({
+        targets: hiTxt,
+        alpha: 0.3,
+        duration: 350,
+        yoyo: true,
+        repeat: -1
+      });
+    }
+    const restartBtn = this.add.text(GAME_W / 2, 518, '¡INSERT COIN / PULSA ESPACIO!', {
+      fontFamily: 'monospace',
+      fontSize: '16px',
+      fontStyle: 'bold',
+      color: '#ffffff',
+      backgroundColor: '#ff007f',
+      padding: { x: 16, y: 11 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.tweens.add({
+      targets: restartBtn,
+      scale: 1.05,
+      duration: 400,
+      yoyo: true,
+      repeat: -1
+    });
+    const restartGame = () => {
+      audio.playHorn();
+      audio.startBGM();
+      this.scene.start('GameScene', { vehicle: VEHICLES[selectedVehicleIndex] });
+    };
+    ['keydown-SPACE', 'keydown-ENTER', 'keydown-Z', 'keydown-X', 'keydown-C', 'keydown-CONTROL', 'keydown-ONE', 'keydown-FIVE'].forEach(k => {
+      this.input.keyboard.on(k, restartGame);
+    });
+    restartBtn.on('pointerdown', restartGame);
+    const changeVehBtn = this.add.text(GAME_W / 2, 585, '🚐 CAMBIAR CAMIONETA (MENÚ / ESC)', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00ffcc'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const goToMenu = () => this.scene.start('TitleScene');
+    changeVehBtn.on('pointerdown', goToMenu);
+    this.input.keyboard.on('keydown-ESC', goToMenu);
+    this.input.keyboard.on('keydown-M', goToMenu);
+  }
+}
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game-container',
+  width: GAME_W,
+  height: GAME_H,
+  pixelArt: true,
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 0 },
+      debug: false
+    }
+  },
+  scene: [BootScene, CoverScene, TitleScene, GameScene, GameOverScene]
+};
+window.addEventListener('load', () => {
+  new Phaser.Game(config);
+});
+</script>
+</body>
+</html>
